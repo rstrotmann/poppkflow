@@ -57,6 +57,3 @@ devtools::load_all()
 devtools::test()                                 # fast tests with a stub fit function
 Sys.setenv(POPPKFLOW_SLOW = "true"); devtools::test()   # also real nlmixr2 fits
 ```
-
-`dev/regression_RS2023.R` reproduces the base and final model of the RS2023
-analysis in `../popPK` with this package.
