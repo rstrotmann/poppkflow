@@ -28,11 +28,11 @@ loop with
 }
 }
 \author{
-\strong{Maintainer}: Package Maintainer \email{maintainer@example.com}
+\strong{Maintainer}: Rainer Strotmann \email{rainer.strotmann@mailbox.org} (\href{https://orcid.org/0000-0003-0543-7984}{ORCID}) [copyright holder]
 
 Authors:
 \itemize{
-  \item Package Maintainer \email{maintainer@example.com}
+  \item Rainer Strotmann \email{rainer.strotmann@mailbox.org} (\href{https://orcid.org/0000-0003-0543-7984}{ORCID}) [copyright holder]
 }
 
 }

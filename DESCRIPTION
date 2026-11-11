@@ -2,7 +2,9 @@ Package: poppkflow
 Title: Structured Iterative Population PK Workflow with 'nlmixr2'
 Version: 0.1.0
 Authors@R: 
-    person("Package", "Maintainer", , "maintainer@example.com", role = c("aut", "cre"))
+    person("Rainer", "Strotmann", email = "rainer.strotmann@mailbox.org",
+    role = c("aut", "cre", "cph"),
+    comment = c(ORCID = "0000-0003-0543-7984"))
 Description: Supports the data-driven, iterative process of population
     pharmacokinetic model development with 'nlmixr2'. Models are declarative
     specifications, every fit is registered in a run ledger (a flat table plus
