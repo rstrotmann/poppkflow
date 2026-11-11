@@ -1,0 +1,19 @@
+url: ~
+template:
+  bootstrap: 5
+
+reference:
+  - title: Project and data
+    contents: [pk_project, pk_covariates, pk_data, pk_check, pk_simulate_example]
+  - title: Model specification
+    contents: [pk_spec, pk_params, pk_edit, pk_inits_from, pk_compile, pk_est]
+  - title: Runs and ledger
+    contents: [pk_run, pk_runs, pk_get, pk_params_table, pk_decide]
+  - title: Diagnostics and comparison
+    contents: [pk_diagnostics, pk_plots, pk_flags, pk_suggest, pk_compare]
+  - title: Covariates and robustness
+    contents: [pk_screen_covariates, pk_scm, pk_multistart, pk_repro]
+  - title: Evaluation
+    contents: [pk_bootstrap, pk_bootstrap_summary, pk_vpc, pk_exposure, pk_exposure_summary]
+  - title: Reporting and migration
+    contents: [pk_report, pk_import_legacy]

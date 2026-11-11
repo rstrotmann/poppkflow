@@ -1,0 +1,45 @@
+Package: poppkflow
+Title: Structured Iterative Population PK Workflow with 'nlmixr2'
+Version: 0.0.0.9000
+Authors@R: 
+    person("Package", "Maintainer", , "maintainer@example.com", role = c("aut", "cre"))
+Description: Supports the data-driven, iterative process of population
+    pharmacokinetic model development with 'nlmixr2'. Models are declarative
+    specifications, every fit is registered in a run ledger (a flat table plus
+    RDS files per run), and the tools for diagnostics, comparison with the
+    parent run, decisions with rationale, covariate modelling, robustness
+    checks, evaluation and reporting work on that ledger.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.1.0)
+Imports:
+    cli,
+    digest,
+    dplyr,
+    ggplot2,
+    nlmixr2est,
+    readr,
+    rlang,
+    rxode2,
+    stats,
+    tibble,
+    tidyr,
+    utils,
+    yaml
+Suggests:
+    future.apply,
+    knitr,
+    nlmixr2,
+    nlmixr2extra,
+    nlmixr2plot,
+    patchwork,
+    pkgdown,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    vpc,
+    withr
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+Config/roxygen2/version: 8.1.1

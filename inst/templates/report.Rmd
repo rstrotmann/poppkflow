@@ -1,0 +1,134 @@
+---
+title: "Population pharmacokinetic analysis: model development report"
+date: "`r format(Sys.Date())`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+params:
+  proj_path: NULL
+  final_id: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(poppkflow)
+proj <- pk_open(params$proj_path)
+final <- params$final_id
+cfg <- proj$config
+runs <- pk_runs(proj = proj)
+kable <- function(x, ...) knitr::kable(x, digits = 3, ...)
+```
+
+This report was generated from the run ledger of project **`r proj$name`**.
+The final model is **`r final`**.
+
+# 1. Data
+
+```{r data}
+d <- tryCatch(pk_data(proj = proj), error = function(e) NULL)
+if (is.null(d)) {
+  cat("No dataset registered.")
+} else {
+  cat(sprintf("Dataset: %s; %d records, %d subjects; data hash %s.\n", cfg$data$file, nrow(d),
+              length(unique(d[[if (is.null(cfg$data$id)) "ID" else cfg$data$id]])), attr(d, "data_hash")))
+  chk <- pk_check(d, proj = proj)
+  if (nrow(chk)) kable(chk) else cat("\nNo findings in the data checks.")
+}
+```
+
+# 2. Model development history
+
+```{r history}
+h <- pk_history(proj = proj)
+kable(h[, c("run_id", "parent_id", "stage", "description", "ofv", "dofv_parent", "n_par", "n_flags", "decision")])
+```
+
+## Lineage
+
+```{r tree}
+cat(pk_tree(proj = proj), sep = "\n")
+```
+
+## Decisions and rationale
+
+```{r decisions}
+dec <- runs[!is.na(runs$decision) & runs$decision != "pending", c("run_id", "decision", "decision_reason", "decision_by", "decision_time")]
+if (nrow(dec)) kable(dec) else cat("No decisions recorded.")
+```
+
+# 3. Final model `r final`
+
+## Model code
+
+```{r code, comment=""}
+cat(readLines(file.path(proj$path, "models", final, "model.txt")), sep = "\n")
+```
+
+## Parameter estimates
+
+```{r params}
+kable(pk_params_table(final, proj = proj)[, c("Type", "Code", "Estimate", "RSE (%)", "95% CI lower", "95% CI upper", "CV (%)", "Shrinkage (%)", "Correlation")])
+```
+
+## Diagnostics and flags
+
+```{r diag}
+dg <- pk_diagnostics(final, proj = proj)
+kable(dg$summary)
+if (nrow(dg$flags)) kable(dg$flags[, c("flag", "parameter", "value", "threshold", "message")]) else cat("\nNo flags.")
+```
+
+```{r gof, fig.width=8, fig.height=6}
+p <- tryCatch(pk_plot_gof(final, proj = proj), error = function(e) NULL)
+if (!is.null(p)) print(p)
+```
+
+```{r eta, fig.width=8, fig.height=6}
+p <- tryCatch(pk_plot_eta(final, proj = proj), error = function(e) NULL)
+if (!is.null(p)) print(p)
+```
+
+# 4. Covariate model (stepwise covariate modelling)
+
+```{r scm}
+files <- list.files(file.path(proj$path, "scm"), pattern = "^scm[0-9]+\\.rds$", full.names = TRUE)
+if (!length(files)) {
+  cat("No SCM was run.")
+} else {
+  for (f in files) {
+    s <- readRDS(f)
+    cat(sprintf("\n\nSCM %s: base %s, final %s, selected: %s\n\n", s$scm_id, s$base, s$final$run_id,
+                if (length(s$selected)) paste(s$selected, collapse = ", ") else "none"))
+    print(kable(s$steps[, c("Step", "Tested", "Run", "Reference", "OFV", "dOFV", "Estimate", "RSE", "covStep", "Selected")]))
+  }
+}
+```
+
+# 5. Model evaluation
+
+```{r boot}
+bf <- file.path(proj$path, "models", final, "eval", "bootstrap.rds")
+if (file.exists(bf)) kable(pk_bootstrap_summary(final, proj = proj)) else cat("No bootstrap stored for the final model.")
+```
+
+```{r vpc, fig.width=8, fig.height=5}
+for (f in list.files(file.path(proj$path, "models", final, "eval"), pattern = "^vpc.*rds$", full.names = TRUE)) print(readRDS(f))
+```
+
+```{r expo}
+ef <- file.path(proj$path, "models", final, "eval", "exposure.rds")
+if (file.exists(ef)) kable(pk_exposure_summary(readRDS(ef))) else cat("No exposure analysis stored for the final model.")
+```
+
+# 6. Reproducibility
+
+```{r repro}
+kable(runs[runs$run_id == final, c("run_id", "est_method", "seed", "spec_hash", "data_hash", "settings_hash", "nlmixr2_version", "rxode2_version", "package_version", "r_version")])
+```
+
+# 7. Audit trail
+
+```{r audit}
+kable(pk_audit(proj = proj))
+```

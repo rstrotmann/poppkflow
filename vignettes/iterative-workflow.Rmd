@@ -1,0 +1,92 @@
+---
+title: "The iterative popPK workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The iterative popPK workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+# the fits take a few minutes; set POPPKFLOW_SLOW=true to evaluate the code
+run <- identical(Sys.getenv("POPPKFLOW_SLOW"), "true")
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = run)
+```
+
+Population PK model development is a loop: specify a model, fit it, diagnose it,
+compare it with its parent, decide, and modify. `poppkflow` records every pass of
+the loop in a ledger.
+
+```{r project}
+library(poppkflow)
+proj <- pk_project(file.path(tempdir(), "vignette_project"), name = "Example")
+pk_covariates(tibble::tribble(
+  ~name , ~type         , ~ref,
+  "WT"  , "continuous"  , 70  ,
+  "CRCL", "continuous"  , 100 ,
+  "SEXF", "categorical" , NA
+))
+dat <- pk_data(system.file("extdata", "example_pk.csv", package = "poppkflow"))
+pk_check(dat)
+```
+
+## Base model
+
+A model is described as data. `pk_code()` shows the generated `nlmixr2` code.
+
+```{r base}
+base_spec <- pk_spec(
+  ncmt = 2, lag = TRUE, iiv = c("ka", "cl", "v2"),
+  inits = list(ka = 1, cl = 5, v2 = 30, q = 4, v3 = 50, tlag = 0.25)
+)
+cat(pk_code(base_spec))
+r1 <- pk_run(base_spec, est = pk_est(method = "focei"), note = "Base model", stage = "structural")
+pk_diagnostics(r1)
+```
+
+## A modification suggested by the data
+
+Every editing verb takes a run (or specification) and returns a candidate that
+remembers its parent.
+
+```{r cov}
+r2 <- r1 |>
+  pk_add_cov("cl", "WT", form = "power", init = 0.75) |>
+  pk_add_cov("v2", "WT", form = "power", init = 1) |>
+  pk_inits_from(r1) |>
+  pk_run(est = pk_est(method = "focei"), note = "Weight on CL and V2", stage = "covariate")
+pk_compare(r1, r2)
+pk_decide(r2, "accepted", reason = "dOFV exceeds the 1% criterion for 2 df, effects plausible")
+```
+
+## History and lineage
+
+```{r history}
+pk_history()
+pk_tree()
+pk_audit()
+```
+
+## Covariate screening and SCM
+
+```{r scm}
+pk_screen_covariates(r1)
+cands <- tibble::tribble(
+  ~param, ~covariate, ~form   , ~ref, ~init,
+  "cl"  , "WT"      , "power" , 70  , 0.75 ,
+  "cl"  , "CRCL"    , "power" , 100 , 0.1  ,
+  "cl"  , "SEXF"    , "cat"   , NA  , 0
+)
+scm <- pk_scm(r1, cands, est = pk_est(method = "focei"), require_cov_step = FALSE)
+scm$steps
+```
+
+## Evaluation and report
+
+```{r eval, eval = FALSE}
+pk_bootstrap(scm$final, n = 200)
+pk_bootstrap_summary(scm$final)
+pk_vpc(scm$final, n = 500)
+pk_exposure(scm$final, dose = 100, ii = 24)
+pk_report(scm$final)
+```
