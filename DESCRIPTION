@@ -1,6 +1,6 @@
 Package: poppkflow
 Title: Structured Iterative Population PK Workflow with 'nlmixr2'
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R: 
     person("Package", "Maintainer", , "maintainer@example.com", role = c("aut", "cre"))
 Description: Supports the data-driven, iterative process of population
