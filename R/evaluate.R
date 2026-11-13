@@ -167,8 +167,7 @@ pk_vpc <- function(run, n = 300, pred_corr = FALSE, stratify = NULL, log_y = FAL
   if (!requireNamespace("nlmixr2plot", quietly = TRUE)) {
     cli::cli_abort("The package {.pkg nlmixr2plot} is needed for {.fn pk_vpc}.")
   }
-  p <- do.call(nlmixr2plot::vpcPlot, args) +
-    theme_bw()
+  p <- do.call(nlmixr2plot::vpcPlot, args)
   saveRDS(p, file.path(eval_dir(r$proj$path, r$run_id), paste0("vpc", if (pred_corr) "_pc" else "", ".rds")))
   event_append(r$proj, r$run_id, "vpc", sprintf("n=%d, pred_corr=%s", n, pred_corr))
   p
