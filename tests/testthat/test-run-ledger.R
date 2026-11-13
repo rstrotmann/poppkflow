@@ -83,6 +83,94 @@ test_that("a failed fit is recorded and the error is re-thrown", {
 })
 
 
+test_that("an error after the fit marks the run as failed instead of leaving it running", {
+  proj <- local_project()
+  with_mocked_bindings(
+    expect_error(new_run(proj, pk_spec(ncmt = 2)), "boom"),
+    compute_diagnostics = function(...) stop("boom"),
+    .package = "poppkflow"
+  )
+  runs <- pk_runs()
+  expect_equal(runs$status, "failed")
+  expect_match(runs$error_message, "boom")
+  expect_false(is.na(runs$finished))
+  expect_equal(pk_audit()$event, c("created", "failed"))
+
+  # a failed run is neither used as cache nor blocks the next run
+  r <- new_run(proj, pk_spec(ncmt = 2))
+  expect_equal(r$run_id, "run002")
+  expect_equal(pk_runs()$status, c("failed", "completed"))
+})
+
+
+test_that("an interrupt during the fit marks the run as failed", {
+  proj <- local_project()
+  interrupting <- function(model, data, est) {
+    stop(structure(class = c("test_interrupt", "condition"), list(message = "stop", call = NULL)))
+  }
+  # an exiting handler unwinds the stack like a real interrupt does
+  out <- tryCatch(new_run(proj, pk_spec(ncmt = 2), fit_fun = interrupting), test_interrupt = function(cnd) "interrupted")
+  expect_equal(out, "interrupted")
+  runs <- pk_runs()
+  expect_equal(runs$status, "failed")
+  expect_match(runs$error_message, "Interrupted")
+  expect_equal(pk_audit()$event, c("created", "failed"))
+})
+
+
+test_that("an identical model under a different parent is fitted again by default", {
+  proj <- local_project()
+  new_run(proj, pk_spec(ncmt = 2))
+  new_run(proj, pk_spec(ncmt = 2, iiv = c("cl", "v2", "ka")))
+  calls <- 0
+  counting <- function(model, data, est) {
+    calls <<- calls + 1
+    stub_fit_fun()(model, data, est)
+  }
+
+  # run002 is the same model, but not derived from run001
+  r3 <- new_run(proj, pk_add_iiv("run001", "ka"), fit_fun = counting)
+  expect_equal(calls, 1)
+  expect_equal(r3$run_id, "run003")
+  runs <- pk_runs()
+  expect_equal(runs$parent_id, c(NA, NA, "run001"))
+  expect_equal(runs$run_key[2], runs$run_key[3])
+
+  # the same derivation again is found under its own parent
+  r3b <- new_run(proj, pk_add_iiv("run001", "ka"), fit_fun = counting)
+  expect_equal(r3b$run_id, "run003")
+  expect_equal(calls, 1)
+  expect_equal(nrow(pk_runs()), 3L)
+})
+
+
+test_that("cache = 'any' returns the earlier run and logs the requested parent", {
+  proj <- local_project()
+  new_run(proj, pk_spec(ncmt = 2))
+  new_run(proj, pk_spec(ncmt = 2, iiv = c("cl", "v2", "ka")))
+  r3 <- new_run(proj, pk_add_iiv("run001", "ka"), cache = "any")
+  expect_equal(r3$run_id, "run002")
+  expect_equal(nrow(pk_runs()), 2L)
+  ev <- pk_audit(run = "run002")
+  expect_equal(ev$event, c("created", "completed", "cache_hit"))
+  expect_match(ev$detail[3], "requested parent=run001; stored parent=NA")
+
+  # a hit under the same parent is not logged as a different derivation
+  new_run(proj, pk_spec(ncmt = 2), cache = "any")
+  expect_equal(pk_audit(run = "run001")$event, c("created", "completed"))
+})
+
+
+test_that("a run that is re-run from itself is returned from the cache", {
+  proj <- local_project()
+  r1 <- new_run(proj, pk_spec(ncmt = 2))
+  again <- new_run(proj, r1)
+  expect_equal(again$run_id, "run001")
+  expect_equal(nrow(pk_runs()), 1L)
+  expect_equal(pk_audit()$event, c("created", "completed"))
+})
+
+
 test_that("pk_run rejects data without the required columns before registering a run", {
   proj <- local_project()
   d <- example_data()

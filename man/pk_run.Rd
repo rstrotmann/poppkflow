@@ -12,6 +12,7 @@ pk_run(
   stage = NA_character_,
   id = NULL,
   refit = FALSE,
+  cache = c("same_parent", "any"),
   fit_fun = NULL,
   quiet = FALSE,
   proj = NULL
@@ -37,6 +38,11 @@ otherwise \code{pk_run()} stops before a run is registered.}
 
 \item{refit}{Fit again even if an identical completed run exists?}
 
+\item{cache}{Which identical completed run may be returned instead of
+fitting: \code{"same_parent"} (default) only one with the same parent as the
+requested run, \code{"any"} one with any parent (a \code{cache_hit} event records a
+different requested parent). Ignored if \code{refit = TRUE}.}
+
 \item{fit_fun}{Function \code{f(model, data, est)} that returns a fit. Default:
 the \code{nlmixr2} fit with the strategy of \code{\link[=pk_est]{pk_est()}}. Mainly useful for tests.}
 
@@ -56,8 +62,8 @@ access results and fit.
 \item compiles the specification to \code{nlmixr2} code,
 \item computes the run key from the specification (generated code), the data and
 the estimation settings, and returns the existing run if the same
-combination has already been completed (caching; use \code{refit = TRUE} to
-force a new fit),
+combination has already been completed under the same parent (caching,
+see \code{cache}; use \code{refit = TRUE} to force a new fit),
 \item registers the run (with parent, stage and note) in the ledger,
 \item fits the model,
 \item stores \code{fit.rds}, \code{result.rds}, \code{spec.rds}, \code{model.txt}, \code{settings.rds} and
@@ -66,8 +72,19 @@ force a new fit),
 number, covariance step status, shrinkage, and the number of flags.
 }
 
-A failed fit is recorded with status \code{"failed"} and the error message, and
-the error is re-thrown.
+A run that does not complete is recorded with status \code{"failed"} and the error
+message, and the error is re-thrown. This covers an error in the fit, an
+error while the results are extracted and stored, and an interrupt (the
+message then says that the run was interrupted). A run is therefore never left
+with the status \code{"running"} unless the R process itself is killed.
+
+The cache respects the lineage. An identical model that was fitted under a
+different parent is a different step in the development history, so with
+\code{cache = "same_parent"} (default) it is fitted again as a new run. A run
+that is re-run from itself (\code{pk_run("run003")} without changes) returns that
+run. With \code{cache = "any"} the earlier run is returned whatever its parent;
+the event log of that run then records the \code{cache_hit} with the requested
+parent, so the attempted derivation stays visible in \code{\link[=pk_audit]{pk_audit()}}.
 }
 \examples{
 \donttest{
