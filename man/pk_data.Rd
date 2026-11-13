@@ -22,6 +22,14 @@ it is already there), registered in \code{config.yml}, and returned. Without
 \code{file}, the registered dataset is read. Missing values are read from the
 \code{data$na} entry of the config (default \code{"."}).
 }
+\details{
+A file that is registered must contain the required columns \code{ID}, \code{TIME},
+\code{DV}, \code{EVID} and \code{AMT} (the names can be changed in the \code{data} section of
+\code{config.yml}; names are case-sensitive). The header is checked before the
+file is copied or registered, so a file with missing columns is rejected and
+the project stays unchanged. \code{CMT} is optional. \code{\link[=pk_run]{pk_run()}} repeats the check
+for the data it fits, and \code{\link[=pk_check]{pk_check()}} reports missing columns as errors.
+}
 \examples{
 p <- pk_project(file.path(tempdir(), "demo_data"))
 d <- pk_data(system.file("extdata", "example_pk.csv", package = "poppkflow"))

@@ -83,6 +83,25 @@ test_that("a failed fit is recorded and the error is re-thrown", {
 })
 
 
+test_that("pk_run rejects data without the required columns before registering a run", {
+  proj <- local_project()
+  d <- example_data()
+  d$EVID <- NULL
+  d$AMT <- NULL
+  expect_error(
+    pk_run(pk_spec(ncmt = 2), data = d, est = pk_est(method = "focei"), fit_fun = stub_fit_fun(), quiet = TRUE),
+    "EVID"
+  )
+  expect_equal(nrow(pk_runs()), 0L)
+  expect_equal(nrow(pk_audit()), 0L)
+  expect_false(dir.exists(file.path(proj$path, "models", "run001")))
+
+  # the next valid run still gets the first id
+  r <- new_run(proj, pk_spec(ncmt = 2))
+  expect_equal(r$run_id, "run001")
+})
+
+
 test_that("explicit ids are respected and must be unique", {
   proj <- local_project()
   r <- new_run(proj, pk_spec(ncmt = 2), id = "base")

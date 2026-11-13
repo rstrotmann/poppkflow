@@ -18,7 +18,9 @@ problem was found.
 }
 \description{
 Runs a set of data checks and returns the findings as a tibble: required
-columns, non-numeric or missing values, duplicated records, time order,
+columns (\code{ID}, \code{TIME}, \code{DV}, \code{EVID}, \code{AMT}; a missing column is an error and
+stops the remaining checks), non-numeric or missing values, duplicated
+records, time order,
 observations before the first dose, subjects without observations,
 non-positive concentrations, and missing or out-of-range covariates (ranges
 from the covariate dictionary, see \code{\link[=pk_covariates]{pk_covariates()}}).

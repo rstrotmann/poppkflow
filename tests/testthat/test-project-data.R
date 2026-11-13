@@ -79,4 +79,74 @@ test_that("pk_check reports missing required columns", {
   proj <- local_project()
   out <- pk_check(data.frame(ID = 1, TIME = 0))
   expect_equal(out$check, "required_columns")
+  expect_equal(out$n, 3L)
+})
+
+
+test_that("pk_check reports a missing EVID or AMT column as an error", {
+  proj <- local_project()
+  d <- as.data.frame(tibble::tribble(
+    ~ID, ~TIME, ~DV ,
+    1  , 0    , NA  ,
+    1  , 1    , 2.5
+  ))
+  out <- pk_check(d)
+  expect_equal(out$check, "required_columns")
+  expect_equal(out$severity, "error")
+  expect_equal(out$n, 2L)
+  expect_match(out$detail, "EVID")
+  expect_match(out$detail, "AMT")
+})
+
+
+test_that("pk_data rejects a file without the required columns and registers nothing", {
+  proj <- local_project()
+  file <- file.path(withr::local_tempdir(), "bad.csv")
+  tbl <- tibble::tribble(
+    ~ID, ~TIME, ~DV ,
+    1  , 0    , NA  ,
+    1  , 1    , 2.5
+  )
+  readr::write_csv(tbl, file, na = ".")
+  expect_error(pk_data(file), "EVID")
+  expect_error(pk_data(file), "AMT")
+  expect_false(file.exists(file.path(proj$path, "data", "bad.csv")))
+  expect_null(yaml::read_yaml(file.path(proj$path, "config.yml"))$data$file)
+  expect_error(pk_data(), "No dataset registered")
+})
+
+
+test_that("the error lists every missing column and points out a wrong case", {
+  proj <- local_project()
+  file <- file.path(withr::local_tempdir(), "lower.csv")
+  tbl <- tibble::tribble(
+    ~id, ~time, ~DV , ~AMT, ~EVID,
+    1  , 0    , NA  , 100 , 1    ,
+    1  , 1    , 2.5 , 0   , 0
+  )
+  readr::write_csv(tbl, file, na = ".")
+  err <- expect_error(pk_data(file))
+  msg <- conditionMessage(err)
+  expect_match(msg, "missing 2 required columns")
+  expect_match(msg, "ID")
+  expect_match(msg, "TIME")
+  expect_match(msg, "case-sensitive")
+})
+
+
+test_that("the required column names follow the data section of the config", {
+  proj <- local_project()
+  pk_project(proj$path, config = list(data = list(id = "SUBJ")))
+  dir <- withr::local_tempdir()
+  with_id <- file.path(dir, "with_id.csv")
+  with_subj <- file.path(dir, "with_subj.csv")
+  tbl <- tibble::tribble(
+    ~ID, ~TIME, ~DV , ~AMT, ~EVID,
+    1  , 0    , NA  , 100 , 1    ,
+    1  , 1    , 2.5 , 0   , 0
+  )
+  readr::write_csv(tbl, with_id, na = ".")
+  readr::write_csv(dplyr::rename(tbl, SUBJ = ID), with_subj, na = ".")
+  expect_error(pk_data(with_id), "SUBJ")
+  expect_equal(nrow(pk_data(with_subj)), 2L)
 })

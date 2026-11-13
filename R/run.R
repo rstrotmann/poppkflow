@@ -28,6 +28,8 @@ data_hash_of <- function(d) {
 #'   [pk_edit]), a run reference, or a run id. For a run, its specification is
 #'   re-used and the run becomes the parent.
 #' @param data Data frame. Default: the registered dataset, see [pk_data()].
+#'   It must contain the required columns (`ID`, `TIME`, `DV`, `EVID`, `AMT`);
+#'   otherwise `pk_run()` stops before a run is registered.
 #' @param est Estimation settings, see [pk_est()].
 #' @param note Free-text description of the run (what changed and why).
 #' @param stage Development stage, e.g. `"structural"`, `"stochastic"`,
@@ -63,6 +65,8 @@ pk_run <- function(x, data = NULL, est = NULL, note = NA_character_, stage = NA_
   model <- pk_compile(spec)
   code <- attr(model, "code")
   if (is.null(data)) data <- pk_data(proj = proj)
+  # before anything is written to the ledger
+  assert_data_columns(names(data), proj$config$data)
   est <- est %||% pk_est(proj = proj)
   if (is.null(fit_fun)) fit_fun <- fit_model
 

@@ -22,7 +22,9 @@ pk_run(
 \link{pk_edit}), a run reference, or a run id. For a run, its specification is
 re-used and the run becomes the parent.}
 
-\item{data}{Data frame. Default: the registered dataset, see \code{\link[=pk_data]{pk_data()}}.}
+\item{data}{Data frame. Default: the registered dataset, see \code{\link[=pk_data]{pk_data()}}.
+It must contain the required columns (\code{ID}, \code{TIME}, \code{DV}, \code{EVID}, \code{AMT});
+otherwise \code{pk_run()} stops before a run is registered.}
 
 \item{est}{Estimation settings, see \code{\link[=pk_est]{pk_est()}}.}
 

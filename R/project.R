@@ -20,7 +20,8 @@
 pk_project <- function(path, name = basename(path), config = list()) {
   stopifnot(is_string(path))
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  for (d in c("data", "ledger", "models", "scm", "output/figures", "output/tables", "report")) {
+  for (d in c("data", "ledger", "models", "scm", "output/figures",
+              "output/tables", "report")) {
     dir.create(file.path(path, d), recursive = TRUE, showWarnings = FALSE)
   }
   cfg_file <- file.path(path, "config.yml")
@@ -31,7 +32,8 @@ pk_project <- function(path, name = basename(path), config = list()) {
     cfg <- utils::modifyList(pk_default_config(name), config)
   }
   yaml::write_yaml(cfg, cfg_file)
-  proj <- structure(list(path = normalizePath(path), name = cfg$project$name, config = cfg), class = "pk_project")
+  proj <- structure(list(path = normalizePath(path), name = cfg$project$name,
+                         config = cfg), class = "pk_project")
   pk_use(proj)
   proj
 }
@@ -44,7 +46,14 @@ pk_open <- function(path) {
     cli::cli_abort("No {.file config.yml} in {.path {path}}. Create the project with {.fn pk_project}.")
   }
   cfg <- yaml::read_yaml(cfg_file)
-  proj <- structure(list(path = normalizePath(path), name = cfg$project$name, config = cfg), class = "pk_project")
+  proj <- structure(
+    list(
+      path = normalizePath(path),
+      name = cfg$project$name,
+      config = cfg
+    ),
+    class = "pk_project"
+  )
   pk_use(proj)
   proj
 }
@@ -66,10 +75,24 @@ pk_current <- function() {
   proj
 }
 
+#' Horizontal line using unicode characters
+#'
+#' @param length Line length.
+#'
+#' @returns A character string.
+#' @noRd
+hline <- function(length = 8) {
+  paste0(rep("\U2500", length), collapse = "")
+}
+
 #' @export
 print.pk_project <- function(x, ...) {
   runs <- ledger_read(x)
-  cli::cli_text("{.cls pk_project} {.val {x$name}} at {.path {x$path}}")
+
+  cli::cli_text(paste0(hline(), " PK Project ", hline(), "\n"))
+  # cli::cli_text("{.cls pk_project} {.val {x$name}} at {.path {x$path}}")
+  cli::cli_text("Project {x$name} at {.path {x$path}}")
+
   cli::cli_text("{nrow(runs)} run{?s} in the ledger")
   invisible(x)
 }

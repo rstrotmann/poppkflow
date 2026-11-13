@@ -5,6 +5,13 @@
 #' `file`, the registered dataset is read. Missing values are read from the
 #' `data$na` entry of the config (default `"."`).
 #'
+#' A file that is registered must contain the required columns `ID`, `TIME`,
+#' `DV`, `EVID` and `AMT` (the names can be changed in the `data` section of
+#' `config.yml`; names are case-sensitive). The header is checked before the
+#' file is copied or registered, so a file with missing columns is rejected and
+#' the project stays unchanged. `CMT` is optional. [pk_run()] repeats the check
+#' for the data it fits, and [pk_check()] reports missing columns as errors.
+#'
 #' @param file Path to a csv file. Optional after the first call.
 #' @param copy Copy the file into the project `data/` folder?
 #' @inheritParams pk_project
@@ -23,6 +30,8 @@ pk_data <- function(file = NULL, copy = TRUE, proj = NULL) {
     if (!file.exists(file)) {
       cli::cli_abort("Dataset {.path {file}} does not exist.")
     }
+    header <- readr::read_csv(file, n_max = 0L, show_col_types = FALSE, progress = FALSE)
+    assert_data_columns(names(header), cfg$data, what = paste0("The dataset ", basename(file)))
     target <- file
     if (copy) {
       target <- proj_path(proj, "data", basename(file))
@@ -48,7 +57,9 @@ pk_data <- function(file = NULL, copy = TRUE, proj = NULL) {
 #' Check the analysis dataset
 #'
 #' Runs a set of data checks and returns the findings as a tibble: required
-#' columns, non-numeric or missing values, duplicated records, time order,
+#' columns (`ID`, `TIME`, `DV`, `EVID`, `AMT`; a missing column is an error and
+#' stops the remaining checks), non-numeric or missing values, duplicated
+#' records, time order,
 #' observations before the first dose, subjects without observations,
 #' non-positive concentrations, and missing or out-of-range covariates (ranges
 #' from the covariate dictionary, see [pk_covariates()]).
@@ -78,26 +89,21 @@ pk_check <- function(data = NULL, proj = NULL) {
     proj <- list(config = pk_default_config())
   }
   cfg <- proj$config$data
-  col <- function(k) cfg[[k]] %||% toupper(k)
-  id <- col("id")
-  time <- col("time")
-  dv <- col("dv")
-  evid <- col("evid")
-  amt <- col("amt")
+  cols <- required_data_columns(cfg)
+  id <- cols[["id"]]
+  time <- cols[["time"]]
+  dv <- cols[["dv"]]
+  evid <- cols[["evid"]]
+  amt <- cols[["amt"]]
   out <- list()
   add <- function(check, severity, n, detail) {
     out[[length(out) + 1L]] <<- tibble::tibble(check = check, severity = severity, n = as.integer(n), detail = detail)
   }
 
-  required <- c(id, time, dv)
-  miss_cols <- setdiff(required, names(data))
+  miss_cols <- missing_data_columns(names(data), cfg)
   if (length(miss_cols)) {
     add("required_columns", "error", length(miss_cols), paste("Missing column(s):", paste(miss_cols, collapse = ", ")))
     return(dplyr::bind_rows(out))
-  }
-  if (!evid %in% names(data)) {
-    add("evid_column", "info", 0, paste0("No ", evid, " column; all records treated as observations."))
-    data[[evid]] <- 0L
   }
   if (!is.numeric(data[[time]])) {
     add("time_numeric", "error", sum(!is.finite(suppressWarnings(as.numeric(data[[time]])))), "TIME is not numeric.")
@@ -142,10 +148,8 @@ pk_check <- function(data = NULL, proj = NULL) {
     if (n_nodose) {
       add("subject_without_dose", "error", n_nodose, "Subjects without any dose record.")
     }
-    if (amt %in% names(data)) {
-      n_amt <- sum(dos & (is.na(data[[amt]]) | data[[amt]] <= 0))
-      if (n_amt) add("dose_amount", "error", n_amt, "Dose records with missing or non-positive AMT.")
-    }
+    n_amt <- sum(dos & (is.na(data[[amt]]) | data[[amt]] <= 0))
+    if (n_amt) add("dose_amount", "error", n_amt, "Dose records with missing or non-positive AMT.")
   } else {
     add("no_dose_records", "warning", 0, "No dose records (EVID = 1) found.")
   }
@@ -197,4 +201,39 @@ subject_table <- function(data, proj = NULL, covariates = NULL) {
   names(d)[1] <- "ID"
   d$ID <- as.numeric(as.character(d$ID))
   tibble::as_tibble(d)
+}
+
+# ---- required columns -------------------------------------------------------------------------
+
+# Columns that every analysis dataset must contain, named by role. The names come from the `data`
+# section of the config (defaults ID, TIME, DV, EVID, AMT). CMT is optional and not listed.
+required_data_columns <- function(cfg_data = NULL) {
+  roles <- c("id", "time", "dv", "evid", "amt")
+  vapply(roles, function(k) cfg_data[[k]] %||% toupper(k), character(1))
+}
+
+# Required columns that are not in `data_names`
+missing_data_columns <- function(data_names, cfg_data = NULL) {
+  req <- required_data_columns(cfg_data)
+  req[!req %in% data_names]
+}
+
+# Abort if a required column is missing. `what` names the dataset in the message.
+assert_data_columns <- function(data_names, cfg_data = NULL, what = "The dataset") {
+  req <- unname(required_data_columns(cfg_data))
+  miss <- req[!req %in% data_names]
+  if (!length(miss)) {
+    return(invisible(TRUE))
+  }
+  # a column that exists under a different case is the most likely cause
+  found <- vapply(miss, function(m) data_names[tolower(data_names) == tolower(m)][1], character(1))
+  case <- !is.na(found)
+  msg <- c(
+    "{what} is missing {length(miss)} required column{?s}: {.field {miss}}.",
+    "i" = "Required columns: {.field {req}}. The names can be changed in the {.field data} section of {.file config.yml}."
+  )
+  if (any(case)) {
+    msg <- c(msg, "i" = "Column names are case-sensitive: found {.field {found[case]}} instead of the required {.field {miss[case]}}.")
+  }
+  cli::cli_abort(msg)
 }
