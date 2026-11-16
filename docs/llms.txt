@@ -1,0 +1,154 @@
+# poppkflow
+
+Structured, iterative population PK model development with
+[nlmixr2](https://nlmixr2.org). Model development is a loop: specify a
+model, fit it, diagnose it, compare it with its parent, decide, and
+modify. `poppkflow` supports this loop and records it.
+
+- **Declarative model specifications**
+  ([`pk_spec()`](reference/pk_spec.md),
+  [`pk_add_iiv()`](reference/pk_edit.md),
+  [`pk_add_cov()`](reference/pk_edit.md), …) instead of hand-edited
+  model code.
+- **A run ledger**: `ledger/runs.csv` (one row per run: lineage, hashes,
+  OFV, dOFV against the parent, flags, decision) plus
+  `ledger/events.csv` (append-only audit trail) and RDS files per run
+  (`models/<run>/fit.rds`, `result.rds`, `spec.rds`, …). Identical runs
+  come from a cache.
+- **Standard diagnostics, flags and suggestions** for every run.
+- **Comparison and decisions with rationale**
+  ([`pk_compare()`](reference/pk_compare.md),
+  [`pk_decide()`](reference/pk_decide.md)).
+- **Covariate screening and stepwise covariate modelling**, robustness
+  checks (multiple starts, seeds), bootstrap, VPC, exposure.
+- **A report generated from the ledger**
+  ([`pk_report()`](reference/pk_report.md)).
+
+## Example
+
+``` r
+
+library(poppkflow)
+
+proj <- pk_project("my_analysis")
+pk_covariates(tibble::tribble(
+  ~name , ~type         , ~ref,
+  "WT"  , "continuous"  , 70  ,
+  "CRCL", "continuous"  , 100 ,
+  "SEXF", "categorical" , NA
+))
+dat <- pk_data(system.file("extdata", "example_pk.csv", package = "poppkflow"))
+pk_check(dat)
+
+# base model
+r1 <- pk_run(pk_spec(ncmt = 2, lag = TRUE, iiv = c("ka", "cl", "v2")),
+             note = "Base model", stage = "structural")
+pk_diagnostics(r1)
+
+# the data suggest a change: modify the parent and fit the candidate
+r2 <- r1 |>
+  pk_add_cov("cl", "WT", form = "power", init = 0.75) |>
+  pk_inits_from(r1) |>
+  pk_run(note = "WT on CL", stage = "covariate")
+
+pk_compare(r1, r2)
+pk_decide(r2, "accepted", reason = "dOFV < -6.63 for 1 df; plausible allometric effect")
+
+pk_tree()
+pk_history()
+```
+
+## Development
+
+``` r
+
+devtools::load_all()
+devtools::test()                                 # fast tests with a stub fit function
+Sys.setenv(POPPKFLOW_SLOW = "true"); devtools::test()   # also real nlmixr2 fits
+```
+
+# Package index
+
+## Project and data
+
+- [`pk_project()`](pk_project.md) [`pk_open()`](pk_project.md)
+  [`pk_use()`](pk_project.md) [`pk_current()`](pk_project.md) : Project
+  folders and configuration
+- [`pk_covariates()`](pk_covariates.md) : Covariate dictionary
+- [`pk_data()`](pk_data.md) : Register and read the analysis dataset
+- [`pk_check()`](pk_check.md) : Check the analysis dataset
+- [`pk_simulate_example()`](pk_simulate_example.md) : Simulate a small
+  example dataset
+
+## Model specification
+
+- [`pk_spec()`](pk_spec.md) : Declarative model specification
+- [`pk_params()`](pk_params.md) : Structural parameter names of a
+  specification
+- [`pk_set_structure()`](pk_edit.md) [`pk_add_iiv()`](pk_edit.md)
+  [`pk_drop_iiv()`](pk_edit.md) [`pk_set_block()`](pk_edit.md)
+  [`pk_drop_block()`](pk_edit.md) [`pk_add_iov()`](pk_edit.md)
+  [`pk_set_error()`](pk_edit.md) [`pk_add_cov()`](pk_edit.md)
+  [`pk_drop_cov()`](pk_edit.md) [`pk_set_inits()`](pk_edit.md) : Edit a
+  model specification
+- [`pk_inits_from()`](pk_inits_from.md) : Use the final estimates of a
+  run as initial estimates
+- [`pk_compile()`](pk_compile.md) [`pk_code()`](pk_compile.md) : Compile
+  a specification into an nlmixr2 model
+- [`pk_est()`](pk_est.md) : Estimation settings
+
+## Runs and ledger
+
+- [`pk_run()`](pk_run.md) : Fit a model and register it in the ledger
+- [`pk_runs()`](pk_runs.md) [`pk_history()`](pk_runs.md)
+  [`pk_audit()`](pk_runs.md) [`pk_tree()`](pk_runs.md) : Runs, history,
+  audit trail and lineage
+- [`pk_get()`](pk_get.md) [`pk_result()`](pk_get.md)
+  [`pk_run_ref()`](pk_get.md) : Access a run
+- [`pk_params_table()`](pk_params_table.md) : Parameter table of a run
+- [`pk_decide()`](pk_decide.md) : Record a decision on a run
+
+## Diagnostics and comparison
+
+- [`pk_diagnostics()`](pk_diagnostics.md) : Standard diagnostics bundle
+  for a run
+- [`pk_plot_gof()`](pk_plots.md) [`pk_plot_eta()`](pk_plots.md)
+  [`pk_plot_eta_cov()`](pk_plots.md) [`pk_plot_ind()`](pk_plots.md) :
+  Diagnostic plots
+- [`pk_flags()`](pk_flags.md) : Rule-based warnings for a run
+- [`pk_suggest()`](pk_suggest.md) : Non-binding suggestions for the next
+  modelling step
+- [`pk_compare()`](pk_compare.md) [`pk_compare_params()`](pk_compare.md)
+  : Compare runs
+
+## Covariates and robustness
+
+- [`pk_screen_covariates()`](pk_screen_covariates.md) : Screen ETAs
+  against covariates
+- [`pk_scm()`](pk_scm.md) : Stepwise covariate modelling (SCM)
+- [`pk_multistart()`](pk_multistart.md) : Search for local minima:
+  multiple starting values
+- [`pk_repro()`](pk_repro.md) : Reproducibility of the OFV
+
+## Evaluation
+
+- [`pk_bootstrap()`](pk_bootstrap.md) : Non-parametric bootstrap
+- [`pk_bootstrap_summary()`](pk_bootstrap_summary.md) : Summary of a
+  bootstrap
+- [`pk_vpc()`](pk_vpc.md) : Visual predictive check
+- [`pk_exposure()`](pk_exposure.md) : Individual exposure and secondary
+  parameters
+- [`pk_exposure_summary()`](pk_exposure_summary.md) : Summarise exposure
+  metrics
+
+## Reporting and migration
+
+- [`pk_report()`](pk_report.md) : Generate the model development report
+- [`pk_import_legacy()`](pk_import_legacy.md) : Import existing runs
+  into the ledger
+
+# Articles
+
+### All vignettes
+
+- [The iterative popPK workflow](iterative-workflow.md):
