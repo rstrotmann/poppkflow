@@ -51,6 +51,6 @@ p <- pk_project(file.path(tempdir(), "demo_project"))
 p
 #> ──────── PK Project ────────
 #> Project demo_project at
-#> /private/var/folders/59/9639tths0zn82tnyr73znh6c0000gn/T/Rtmpwzs1pi/demo_project
+#> /private/var/folders/59/9639tths0zn82tnyr73znh6c0000gn/T/RtmpEd3bfM/demo_project
 #> 0 runs in the ledger
 ```

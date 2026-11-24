@@ -2,5 +2,6 @@ pandoc: '3.10'
 pkgdown: 2.2.1
 pkgdown_sha: ~
 articles:
-  iterative-workflow: iterative-workflow.html
-last_built: 2026-11-16T09:25Z
+  poppkflow: poppkflow.html
+  tutorial: tutorial.html
+last_built: 2026-11-24T07:07Z

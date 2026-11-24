@@ -65,8 +65,6 @@ rejected branches is reconstructed weeks later during reporting.
 This tutorial walks through a complete analysis from project creation to final
 report using the simulated oral PK dataset bundled with the package.
 
----
-
 ## 1. Project setup, covariate dictionary, and data validation
 
 ### Creating and configuring a project
@@ -188,7 +186,6 @@ A zero-row tibble means no issues were found:
 pk_check(dat)
 ```
 
----
 
 ## 2. Declarative model specifications and compilation
 
@@ -280,8 +277,6 @@ flags, comparison, decisions, and reporting still work normally; only the
 specification editing verbs (and `pk_exposure()`, which relies on built-in
 compartment structure) do not apply.
 
----
-
 ## 3. Estimation settings and structural model development
 
 ### Choosing an estimation strategy with `pk_est()`
@@ -369,8 +364,6 @@ variances, block covariances, residual error SDs, and non-fixed covariate
 parameters from `r2` into the new candidate, while letting `pk_set_inits()`
 supply the initial value for the newly added `tlag`.
 
----
-
 ## 4. Diagnostics, flags, and suggestions
 
 Every completed run can be inspected uniformly via `pk_diagnostics()`,
@@ -428,8 +421,6 @@ pk_plot_eta(r3)
 pk_plot_ind(r3, n = 9)
 ```
 
----
-
 ## 5. Comparing runs, recording decisions, and inspecting the ledger
 
 ### Comparing candidate runs
@@ -484,8 +475,6 @@ Markdown or Quarto documents, `pk_runs()` returns the complete ledger with
 hashes and versions, and `pk_audit()` returns the append-only event log. When
 you need the underlying objects of a specific run, use `pk_result(run)` (slim
 result list), `pk_get(run)` (full `nlmixr2` fit), or `pk_run_ref("run003")`.
-
----
 
 ## 6. Stochastic and residual error model refinement
 
@@ -542,8 +531,6 @@ pk_decide(r6, "accepted", reason = "Combined error improves fit and matches low-
 If you also want to test inter-occasion variability on a multi-occasion dataset
 (such as `crossover_pk.csv` with `OCC = 1..4`), use
 `pk_add_iov(run, "ka", occasion = "OCC", levels = 1:4, init = 0.02)`.
-
----
 
 ## 7. Covariate screening and stepwise covariate modeling (SCM)
 
@@ -644,8 +631,6 @@ pk_decide(
 )
 ```
 
----
-
 ## 8. Robustness checks: multi-start and OFV reproducibility
 
 Before investing time in bootstrap and VPC, verify that the solution is not an
@@ -683,8 +668,6 @@ rep_check <- pk_repro(r_final, seeds = c(7, 99), perturb_starts = 2)
 rep_check
 attr(rep_check, "ofv_range")
 ```
-
----
 
 ## 9. Model evaluation: bootstrap, VPC, and exposure
 
@@ -749,8 +732,6 @@ pk_exposure_summary(expo)
 expo$WT_group <- cut(expo$WT, breaks = c(0, 70, 90, Inf), labels = c("<70 kg", "70-90 kg", ">90 kg"))
 pk_exposure_summary(expo, by = "WT_group", metrics = c("AUC_ss", "Cmax_ss", "Cmin_ss", "t_half_beta"))
 ```
-
----
 
 ## 10. Reporting, auditing, and importing legacy runs
 

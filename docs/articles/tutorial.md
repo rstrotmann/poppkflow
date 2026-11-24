@@ -1,0 +1,934 @@
+# Iterative population PK modeling with poppkflow
+
+## Introduction: the iterative popPK loop
+
+Population pharmacokinetic (popPK) model development is rarely a
+straight line. In practice, an analyst moves repeatedly around a loop:
+
+1.  **Specify** a candidate model (compartment structure, absorption,
+    random effects, residual error, covariate relationships, initial
+    estimates).
+2.  **Fit** the model to the analysis dataset.
+3.  **Diagnose** the fit using numerical summaries, rule-based checks,
+    and goodness-of-fit plots.
+4.  **Compare** the candidate against its parent model (change in
+    objective function value, parameter stability, precision,
+    shrinkage).
+5.  **Decide** whether to accept or reject the candidate, recording
+    *why*.
+6.  **Modify** the accepted model to propose the next candidate.
+
+In ad-hoc script workflows, model code is copied and edited by hand
+across numbered scripts (`run001.R`, `run002.R`, …), failed attempts
+disappear, parent-child relationships live only in spreadsheets, and the
+rationale for rejected branches is reconstructed weeks later during
+reporting.
+
+`poppkflow` turns this loop into an explicit, auditable data structure
+backed by [`nlmixr2`](https://nlmixr2.org):
+
+- **Declarative specifications
+  ([`pk_spec()`](../reference/pk_spec.md)):** models are R objects
+  edited with composable verbs
+  ([`pk_add_iiv()`](../reference/pk_edit.md),
+  [`pk_set_block()`](../reference/pk_edit.md),
+  [`pk_add_cov()`](../reference/pk_edit.md), …) and compiled
+  deterministically into `nlmixr2` code
+  ([`pk_compile()`](../reference/pk_compile.md),
+  [`pk_code()`](../reference/pk_compile.md)).
+- **Automatic lineage (`pk_candidate`):** editing an existing run
+  returns a *candidate* that remembers its `parent_id`, so fitting it
+  records the parent and computes `dOFV` automatically.
+- **A hub-and-spoke run ledger:** every call to
+  [`pk_run()`](../reference/pk_run.md) writes one summary row to
+  `ledger/runs.csv`, appends timestamped entries to `ledger/events.csv`,
+  and stores the run artifacts in `models/<run_id>/`. Lightweight
+  results (`result.rds`) are extracted immediately so history,
+  diagnostics, flags, comparison, and reporting never have to reload
+  full `nlmixr2` fit objects (`fit.rds`).
+- **Standard diagnostics, evaluation, and reporting:** flags,
+  suggestions, covariate screening, stepwise covariate modeling (SCM),
+  multi-start and reproducibility checks, bootstrap, VPC, exposure
+  derivation, and HTML/PDF/Word reports all read directly from the
+  ledger.
+
+This tutorial walks through a complete analysis from project creation to
+final report using the simulated oral PK dataset bundled with the
+package.
+
+## 1. Project setup, covariate dictionary, and data validation
+
+### Creating and configuring a project
+
+A `poppkflow` project is a self-contained directory with a `config.yml`
+and dedicated folders for data, the run ledger, per-run model artifacts,
+SCM tables, figures, tables, and reports:
+
+``` text
+my_analysis/
+├── config.yml          # project metadata, data mapping, estimation/SCM/flag defaults
+├── data/               # copied analysis dataset
+├── ledger/
+│   ├── runs.csv        # one row per run (current state, hashes, metrics, decision)
+│   └── events.csv      # append-only audit trail
+├── models/
+│   └── run001/         # spec.rds, settings.rds, model.txt, fit.rds, result.rds, diag.rds
+├── scm/                # saved stepwise covariate modeling results (scm01.rds, ...)
+├── output/
+│   ├── figures/
+│   └── tables/
+└── report/             # rendered model development reports
+```
+
+[`pk_project()`](../reference/pk_project.md) creates this folder
+structure (or re-opens an existing project) and registers it as the
+*current* project in `options("poppkflow.project")`. Once a project is
+active, you do not need to pass `proj` to every function call. To switch
+between projects in the same session, use
+[`pk_open()`](../reference/pk_project.md),
+[`pk_use()`](../reference/pk_project.md), or pass `proj` explicitly;
+inspect the active project with
+[`pk_current()`](../reference/pk_project.md).
+
+``` r
+
+library(poppkflow)
+
+proj_dir <- file.path(tempdir(), "poppkflow_tutorial")
+proj <- pk_project(
+  proj_dir,
+  name = "Oral 2-CMT Tutorial",
+  config = list(
+    estimation = list(method = "saem_focei", seed = 2026, nBurn = 300, nEm = 300),
+    scm = list(forward_p = 0.01, backward_p = 0.001),
+    flags = list(max_shrinkage_eta = 30, max_rse = 50, max_condition_number = 1000)
+  )
+)
+proj
+#> ──────── PK Project ────────
+#> Project Oral 2-CMT Tutorial at
+#> /private/var/folders/59/9639tths0zn82tnyr73znh6c0000gn/T/RtmpmNsZ8k/poppkflow_tutorial
+#> 0 runs in the ledger
+```
+
+Notice that `config` overrides only the entries you specify and keeps
+defaults for the rest (for example, `data$na = "."` for NONMEM-style
+missing-value markers).
+
+### Defining the covariate dictionary
+
+Before checking data or adding covariates to models, register the
+analysis covariates with
+[`pk_covariates()`](../reference/pk_covariates.md). The dictionary is
+stored in `config.yml` and is reused across the workflow:
+
+- `ref` supplies default centering values in
+  [`pk_add_cov()`](../reference/pk_edit.md) (`power` and `linear`
+  forms).
+- `min` and `max` define plausible bounds checked by
+  [`pk_check()`](../reference/pk_check.md).
+- `type` (`"continuous"` or `"categorical"`) controls how
+  [`pk_screen_covariates()`](../reference/pk_screen_covariates.md) and
+  [`pk_plot_eta_cov()`](../reference/pk_plots.md) test and plot each
+  covariate.
+
+``` r
+
+pk_covariates(tibble::tribble(
+  ~name , ~type         , ~unit    , ~label                 , ~ref, ~min, ~max,
+  "WT"  , "continuous"  , "kg"     , "Body weight"          , 70  , 35  , 180 ,
+  "CRCL", "continuous"  , "mL/min" , "Creatinine clearance" , 100 , 15  , 200 ,
+  "AGE" , "continuous"  , "years"  , "Age"                  , 50  , 18  , 95  ,
+  "SEXF", "categorical" , NA       , "Female sex (0/1)"     , NA  , 0   , 1
+))
+
+pk_covariates()
+#> # A tibble: 4 × 7
+#>   name  type        unit   label                  ref   min   max
+#>   <chr> <chr>       <chr>  <chr>                <dbl> <dbl> <dbl>
+#> 1 WT    continuous  kg     Body weight             70    35   180
+#> 2 CRCL  continuous  mL/min Creatinine clearance   100    15   200
+#> 3 AGE   continuous  years  Age                     50    18    95
+#> 4 SEXF  categorical NA     Female sex (0/1)        NA     0     1
+```
+
+### Registering and checking the dataset
+
+`poppkflow` ships with two simulated datasets in `inst/extdata/`:
+
+- `example_pk.csv`: a single-dose oral study in 40 subjects simulated
+  from a two-compartment model with lag time, body-weight effects on
+  `CL` and `V2`, creatinine-clearance effect on `CL`, and combined
+  residual error (created by
+  [`pk_simulate_example()`](../reference/pk_simulate_example.md)).
+- `crossover_pk.csv`: a 20-subject, 4-period crossover study varying
+  food state (`FOOD` 1 vs. 2) and dose (200 vs. 500 mg) for testing
+  time-varying covariates and crossover designs.
+
+Here we use `example_pk.csv`. Calling `pk_data(file)` validates that the
+CSV header contains the required columns (`ID`, `TIME`, `DV`, `EVID`,
+and `AMT`; names are case-sensitive and configurable in `config.yml`),
+copies the file into `data/`, records the relative path in `config.yml`,
+and returns the data frame with an MD5 `data_hash` attribute. If any
+required column is missing, [`pk_data()`](../reference/pk_data.md)
+aborts *before* copying or modifying `config.yml`.
+
+``` r
+
+data_file <- system.file("extdata", "example_pk.csv", package = "poppkflow")
+dat <- pk_data(data_file)
+
+cat("Rows:", nrow(dat), "| Subjects:", length(unique(dat$ID)), "\n")
+#> Rows: 440 | Subjects: 40
+cat("Data hash:", attr(dat, "data_hash"), "\n")
+#> Data hash: 6d038af6b6fde72c38667ee7a8f987c3
+head(dat, 6)
+#>   ID TIME     DV AMT EVID   WT AGE SEXF CRCL
+#> 1  1 0.00     NA 100    1 83.2  27    0   71
+#> 2  1 0.25 0.0514   0    0 83.2  27    0   71
+#> 3  1 0.50 0.2651   0    0 83.2  27    0   71
+#> 4  1 1.06 0.5431   0    0 83.2  27    0   71
+#> 5  1 2.07 0.9640   0    0 83.2  27    0   71
+#> 6  1 3.00 0.9350   0    0 83.2  27    0   71
+```
+
+Always run [`pk_check()`](../reference/pk_check.md) immediately after
+registering a dataset. It verifies:
+
+- required columns and numeric types (`TIME`, `DV`),
+- missing `TIME`, missing `DV` on observation records, and non-positive
+  `DV` (potential BLQ records),
+- duplicate `ID`/`TIME`/`EVID` rows and non-monotonic `TIME` within
+  subjects,
+- observations before the first dose, subjects without doses or
+  observations, and non-positive dosing amounts (`AMT`),
+- missing covariate columns, missing covariate values, out-of-range
+  numeric values against
+  [`pk_covariates()`](../reference/pk_covariates.md), and within-subject
+  (time-varying) covariate variation.
+
+A zero-row tibble means no issues were found:
+
+``` r
+
+pk_check(dat)
+#> # A tibble: 0 × 4
+#> # ℹ 4 variables: check <chr>, severity <chr>, n <int>, detail <chr>
+```
+
+## 2. Declarative model specifications and compilation
+
+Rather than writing and duplicating `nlmixr2` model functions manually,
+you describe a model as a `pk_spec` object.
+
+### Structural parameterization
+
+Built-in specifications support 1- and 2-compartment linear models
+(`linCmt()`) with `"oral"` (first-order absorption) or `"iv"` dosing and
+optional absorption lag time (`lag = TRUE`, oral only):
+
+- **1-compartment oral:** `ka`, `cl`, `v` (plus `tlag` if `lag = TRUE`)
+- **2-compartment oral:** `ka`, `cl`, `v2`, `q`, `v3` (plus `tlag` if
+  `lag = TRUE`)
+- **IV routes:** omit `ka` and `tlag`
+
+Every structural parameter is parameterized on the log scale:
+
+``` math
+P_i = \exp\!\left(\theta_{\log P} + \text{covariate terms}_i + \eta_{P,i} + \text{IOV terms}_{i,k}\right)
+```
+
+Initial estimates in `inits` are supplied on the **natural scale** (for
+example, `cl = 5` compiles to `lcl <- log(5)`). Residual error can be
+`"prop"`, `"add"`, or `"comb"`.
+
+``` r
+
+spec_1cmt <- pk_spec(
+  ncmt = 1,
+  route = "oral",
+  lag = FALSE,
+  iiv = c("cl", "v"),
+  error = "prop",
+  inits = list(ka = 1, cl = 5, v = 30, prop.sd = 0.2)
+)
+spec_1cmt
+#> <pk_spec>: 1-compartment, oral
+#> IIV: "cl" and "v"; blocks: 0; IOV: none
+#> Residual error: "prop"
+#> Covariates: none
+pk_params(spec_1cmt)
+#> [1] "ka" "cl" "v"
+```
+
+[`pk_code()`](../reference/pk_compile.md) shows the exact `nlmixr2`
+function produced by [`pk_compile()`](../reference/pk_compile.md). This
+generated text is what [`pk_run()`](../reference/pk_run.md) writes to
+`models/<run_id>/model.txt` and hashes into `spec_hash`:
+
+``` r
+
+cat(pk_code(spec_1cmt))
+#> function() {
+#>   ini({
+#>     lka <- log(1)
+#>     lcl <- log(5)
+#>     lv <- log(30)
+#>     eta.cl ~ 0.1
+#>     eta.v ~ 0.1
+#>     prop.sd <- 0.2
+#>   })
+#>   model({
+#>     ka <- exp(lka)
+#>     cl <- exp(lcl + eta.cl)
+#>     v <- exp(lv + eta.v)
+#>     linCmt() ~ prop(prop.sd)
+#>   })
+#> }
+```
+
+### Composable editing verbs and candidates
+
+Every editing verb takes a `pk_spec`, a `pk_candidate`, a `pk_run_ref`,
+or a run ID string and returns a `pk_candidate` without mutating the
+input:
+
+| Task | Editing verbs |
+|----|----|
+| Compartment / route / lag | `pk_set_structure(x, ncmt, route, lag)` |
+| Inter-individual variability | `pk_add_iiv(x, ...)`, `pk_drop_iiv(x, ...)` |
+| Omega covariance blocks | `pk_set_block(x, params)`, `pk_drop_block(x, params)` |
+| Inter-occasion variability | `pk_add_iov(x, param, occasion, levels, init)` |
+| Residual error model | `pk_set_error(x, "prop" / "add" / "comb")` |
+| Covariate relationships | `pk_add_cov(x, param, covariate, form, ...)`, `pk_drop_cov(x, id)` |
+| Initial estimates | `pk_set_inits(x, ...)`, `pk_inits_from(x, run)` |
+
+For instance, we can preview how a 2-compartment model with lag time, an
+omega block on `CL`-`V2`, combined error, and weight allometry compiles
+before fitting anything:
+
+``` r
+
+preview_cand <- spec_1cmt |>
+  pk_set_structure(ncmt = 2, lag = TRUE) |>
+  pk_add_iiv("ka", "v2") |>
+  pk_set_block(c("cl", "v2")) |>
+  pk_set_error("comb") |>
+  pk_add_cov("cl", "WT", form = "power", init = 0.75) |>
+  pk_set_inits(ka = 1, cl = 5, v2 = 30, q = 4, v3 = 50, tlag = 0.25)
+
+preview_cand
+#> <pk_candidate> derived from NA
+#> <pk_spec>: 2-compartment, oral, lag time
+#> IIV: "cl", "ka", and "v2"; blocks: 1; IOV: none
+#> Residual error: "comb"
+#> Covariates: CL~WT
+cat(pk_code(preview_cand))
+#> function() {
+#>   ini({
+#>     lka <- log(1)
+#>     lcl <- log(5)
+#>     lv2 <- log(30)
+#>     lq <- log(4)
+#>     lv3 <- log(50)
+#>     ltlag <- log(0.25)
+#>     cl_wt <- 0.75
+#>     eta.cl + eta.v2 ~ c(0.10, 0.01, 0.10)
+#>     eta.ka ~ 0.1
+#>     prop.sd <- 0.2
+#>     add.sd <- 0.1
+#>   })
+#>   model({
+#>     ka <- exp(lka + eta.ka)
+#>     cl <- exp(lcl + cl_wt * log(WT/70) + eta.cl)
+#>     v2 <- exp(lv2 + eta.v2)
+#>     q <- exp(lq)
+#>     v3 <- exp(lv3)
+#>     alag(depot) <- exp(ltlag)
+#>     linCmt() ~ prop(prop.sd) + add(add.sd)
+#>   })
+#> }
+```
+
+Notice that `pk_add_cov("cl", "WT", form = "power", init = 0.75)` did
+not need an explicit `ref = 70` because it looked up `WT` in the
+covariate dictionary.
+
+### Custom models (`custom_fn`)
+
+If your analysis requires a structure outside the built-in `linCmt()`
+templates (such as a 3-compartment model, Michaelis-Menten elimination,
+transit-compartment absorption, or a parent-metabolite ODE system), pass
+a standard `nlmixr2` model function via `pk_spec(custom_fn = my_fn)`.
+The run ledger, caching, diagnostics, flags, comparison, decisions, and
+reporting still work normally; only the specification editing verbs (and
+[`pk_exposure()`](../reference/pk_exposure.md), which relies on built-in
+compartment structure) do not apply.
+
+## 3. Estimation settings and structural model development
+
+### Choosing an estimation strategy with `pk_est()`
+
+[`pk_est()`](../reference/pk_est.md) builds the estimation settings
+object passed to [`pk_run()`](../reference/pk_run.md), filling
+unspecified arguments from `config.yml`. Three methods are supported:
+
+- **`"saem_focei"` (default):** runs SAEM first to locate the population
+  optimum and consistent individual modes, then refines the fit with
+  FOCEI started from the SAEM solution. For oral PK data with slow
+  absorption (flip-flop tendencies), individual likelihood surfaces can
+  be multimodal; FOCEI alone may converge to different local modes
+  depending on initial values, whereas SAEM→FOCEI stabilizes the FOCEI
+  objective function value (OFV) and covariance step (`r,s`).
+- **`"focei"`:** direct FOCEI estimation. Fast and convenient for rapid
+  structural exploration or well-behaved datasets.
+- **`"saem"`:** SAEM alone (useful for bootstrap replicates where an
+  exact FOCEI OFV is unnecessary).
+
+In this tutorial’s fitting chunks we use `pk_est(method = "focei")`
+during initial structural screening for speed and switch to
+`"saem_focei"` for final confirmation.
+
+### Fitting structural candidates with `pk_run()`
+
+Each call to [`pk_run()`](../reference/pk_run.md) performs six steps:
+
+1.  Compiles the specification to `nlmixr2` code.
+2.  Validates required data columns and computes `run_key` from the
+    generated code hash, data hash, and estimation settings hash.
+3.  Checks the ledger cache: if an identical completed run exists under
+    the same parent (`cache = "same_parent"`, the default),
+    [`pk_run()`](../reference/pk_run.md) returns that run reference
+    immediately without refitting. Pass `cache = "any"` to reuse an
+    identical model regardless of parent (which logs a `cache_hit` event
+    in `events.csv`), or `refit = TRUE` to force a fresh fit.
+4.  Registers the run with `status = "running"`, `parent_id`, `stage`,
+    `note`, hashes, and software versions (`nlmixr2est`, `rxode2`,
+    `poppkflow`, R).
+5.  Fits the model and saves `fit.rds`, `result.rds`, and `diag.rds`. If
+    the fit or post-fit storage fails—or if you interrupt the session—an
+    [`on.exit()`](https://rdrr.io/r/base/on.exit.html) handler marks the
+    run `status = "failed"` with the error message so the ledger never
+    accumulates stuck `"running"` rows.
+6.  Updates the ledger row to `"completed"` with OFV, `dofv_parent`,
+    AIC, BIC, parameter counts, condition number, covariance step
+    status, maximum ETA shrinkage, and flag count.
+
+Let’s fit three nested structural models: 1-compartment (`r1`),
+2-compartment (`r2`), and 2-compartment with absorption lag time (`r3`):
+
+``` r
+
+est_fast <- pk_est(method = "focei")
+
+# Run 1: 1-compartment oral base model
+r1 <- pk_run(
+  spec_1cmt,
+  est = est_fast,
+  note = "1-CMT oral base, IIV on CL and V, prop error",
+  stage = "structural"
+)
+
+# Run 2: 2-compartment oral model derived from r1
+r2 <- r1 |>
+  pk_set_structure(ncmt = 2) |>
+  pk_add_iiv("v2") |>
+  pk_set_inits(ka = 1, cl = 5, v2 = 30, q = 4, v3 = 50) |>
+  pk_run(
+    est = est_fast,
+    note = "2-CMT oral, IIV on CL and V2, prop error",
+    stage = "structural"
+  )
+
+# Run 3: add absorption lag time, initialized from r2's final estimates
+r3 <- r2 |>
+  pk_set_structure(lag = TRUE) |>
+  pk_inits_from(r2) |>
+  pk_set_inits(tlag = 0.25) |>
+  pk_run(
+    est = est_fast,
+    note = "Add absorption lag time (alag)",
+    stage = "structural"
+  )
+```
+
+Notice `pk_inits_from(r2)`: it copies the final structural estimates,
+IIV variances, block covariances, residual error SDs, and non-fixed
+covariate parameters from `r2` into the new candidate, while letting
+[`pk_set_inits()`](../reference/pk_edit.md) supply the initial value for
+the newly added `tlag`.
+
+## 4. Diagnostics, flags, and suggestions
+
+Every completed run can be inspected uniformly via
+[`pk_diagnostics()`](../reference/pk_diagnostics.md),
+[`pk_params_table()`](../reference/pk_params_table.md),
+[`pk_flags()`](../reference/pk_flags.md),
+[`pk_suggest()`](../reference/pk_suggest.md), and the four plotting
+functions.
+
+### Numerical summary, flags, and suggestions
+
+[`pk_diagnostics()`](../reference/pk_diagnostics.md) returns a summary
+row and all triggered flags (stored in `diag.rds`). Setting
+`plots = TRUE` also generates and saves standard PNG plots in
+`models/<run_id>/diag/`.
+
+``` r
+
+pk_diagnostics(r3)
+pk_params_table(r3)
+pk_flags(r3)
+pk_suggest(r3)
+```
+
+[`pk_flags()`](../reference/pk_flags.md) evaluates nine rule-based
+checks against the thresholds in `config.yml` (overridable per call via
+`thresholds = list(...)`):
+
+| Flag | Default threshold | Meaning |
+|----|----|----|
+| `no_ofv` | OFV non-finite | Missing/invalid objective function (severity `"error"`) |
+| `cov_step_failed` | `cov_step == FALSE` | Covariance step failed; RSEs unavailable |
+| `condition_number` | `> 1000` | High correlation matrix condition number (over-parameterization) |
+| `eta_shrinkage` | `> 30%` | Individual EBEs shrunk toward 0; unreliable for ETA diagnostics |
+| `eps_shrinkage` | `> 30%` | High IWRES shrinkage; prefer PRED/CWRES over IPRED diagnostics |
+| `high_rse` | `> 50%` | Imprecise fixed-effect estimate |
+| `omega_near_zero` | `< 1e-4` | Random-effect variance collapsed toward zero |
+| `cwres_bias` | `|mean| > 0.5` | Systematic residual bias |
+| `cwres_tails` | `> 2%` with `|CWRES| > 3` | Heavy residual tails or outliers |
+
+Flags and [`pk_suggest()`](../reference/pk_suggest.md) hints are
+strictly advisory—the analyst always makes and records the decision.
+
+### Diagnostic plots
+
+Four plotting helpers cover routine popPK graphics (automatically
+arranged into multi-panel layouts when `patchwork` is installed):
+
+- `pk_plot_gof(run, log = TRUE)`: observed vs. PRED, observed vs. IPRED,
+  CWRES vs. TIME, and CWRES vs. PRED with LOESS smoothers. Use
+  `log = FALSE` if your dataset contains zero or negative observations
+  you want to keep visible.
+- `pk_plot_eta(run)`: histograms and QQ plots of subject-level ETAs.
+- `pk_plot_ind(run, n = 12, log = TRUE)`: individual concentration-time
+  profiles showing observed points, IPRED (red solid), and PRED (blue
+  dashed).
+- `pk_plot_eta_cov(run)`: ETAs plotted against every continuous
+  (scatter + LOESS) and categorical (boxplot + jitter) covariate in the
+  dictionary.
+
+``` r
+
+pk_plot_gof(r3)
+pk_plot_eta(r3)
+pk_plot_ind(r3, n = 9)
+```
+
+## 5. Comparing runs, recording decisions, and inspecting the ledger
+
+### Comparing candidate runs
+
+[`pk_compare()`](../reference/pk_compare.md) aligns multiple runs into a
+single comparison table with `ofv`, `dofv`, `df` (change in estimated
+parameter count), `p_lrt` (chi-square likelihood-ratio test p-value when
+`dofv < 0` and `df > 0`), `aic`, `daic`, `bic`, `cond_no`, `cov_step`,
+`n_flags`, and `comparable`.
+
+- Use `ref = "parent"` (default) to compare each run to its own parent.
+- Use `ref = "first"` or a specific run ID (e.g., `ref = "run001"`) to
+  compare all candidates against a common reference.
+- Always check the `comparable` column: it is `FALSE` if two runs were
+  fitted on different datasets (`data_hash`) or with different
+  estimation methods (`est_method`). Note also that the standard
+  chi-square LRT assumes nested models with parameters in the interior
+  of the parameter space; adding an omega variance sits on the boundary
+  ($`\omega^2 = 0`$), where the standard p-value is anti-conservative.
+
+[`pk_compare_params()`](../reference/pk_compare.md) places parameter
+estimates side by side with the relative percent change from the first
+run:
+
+``` r
+
+pk_compare(r1, r2, r3)
+pk_compare_params(r2, r3)
+```
+
+### Recording decisions with rationale
+
+[`pk_decide()`](../reference/pk_decide.md) records `"accepted"`,
+`"rejected"`, or `"pending"` in `runs.csv` and appends a
+`decision:<status>` entry to `events.csv`. A free-text `reason` is
+mandatory for `"accepted"` and `"rejected"` so the modeling rationale is
+captured when it is fresh rather than reconstructed at report time.
+
+``` r
+
+pk_decide(r1, "rejected", reason = "1-CMT misses biphasic elimination; 2-CMT improves OFV substantially")
+pk_decide(r2, "rejected", reason = "Superseded by run003: adding absorption lag time lowers OFV for 1 df")
+pk_decide(r3, "accepted", reason = "2-CMT with absorption lag time captures absorption and disposition well")
+```
+
+### Exploring the development history and lineage
+
+At any point you can inspect the ledger without loading any `fit.rds`
+files:
+
+``` r
+
+pk_history()
+pk_tree()
+```
+
+`pk_tree(format = "mermaid")` emits a Mermaid flowchart block suitable
+for Markdown or Quarto documents, [`pk_runs()`](../reference/pk_runs.md)
+returns the complete ledger with hashes and versions, and
+[`pk_audit()`](../reference/pk_runs.md) returns the append-only event
+log. When you need the underlying objects of a specific run, use
+`pk_result(run)` (slim result list), `pk_get(run)` (full `nlmixr2` fit),
+or `pk_run_ref("run003")`.
+
+## 6. Stochastic and residual error model refinement
+
+With the structural model (`r3`) accepted, the next stage tests
+inter-individual variability (IIV), omega covariance blocks, and
+residual error structure. All candidates branch from `r3` (or from each
+accepted successor) using
+[`pk_inits_from()`](../reference/pk_inits_from.md):
+
+``` r
+
+# Add IIV on KA
+r4 <- r3 |>
+  pk_add_iiv("ka") |>
+  pk_inits_from(r3) |>
+  pk_run(
+    est = est_fast,
+    note = "Add IIV on KA",
+    stage = "stochastic"
+  )
+
+# Test a CL-V2 covariance block
+r5 <- r4 |>
+  pk_set_block(c("cl", "v2")) |>
+  pk_inits_from(r4) |>
+  pk_run(
+    est = est_fast,
+    note = "Add CL-V2 omega covariance block",
+    stage = "stochastic"
+  )
+
+# Test combined proportional + additive residual error
+r6 <- r5 |>
+  pk_set_error("comb") |>
+  pk_inits_from(r5) |>
+  pk_set_inits(add.sd = 0.02) |>
+  pk_run(
+    est = est_fast,
+    note = "Switch residual error from proportional to combined",
+    stage = "stochastic"
+  )
+
+pk_compare(r3, r4, r5, r6)
+pk_diagnostics(r6)
+```
+
+Review the comparison table, parameter precision
+(`pk_params_table(r6)`), and flags (`pk_flags(r6)`), then record
+decisions for each step:
+
+``` r
+
+pk_decide(r4, "accepted", reason = "IIV on KA improves fit with acceptable shrinkage")
+pk_decide(r5, "accepted", reason = "CL-V2 covariance block captures positive CL-V2 correlation")
+pk_decide(r6, "accepted", reason = "Combined error improves fit and matches low-concentration residual variance")
+```
+
+If you also want to test inter-occasion variability on a multi-occasion
+dataset (such as `crossover_pk.csv` with `OCC = 1..4`), use
+`pk_add_iov(run, "ka", occasion = "OCC", levels = 1:4, init = 0.02)`.
+
+## 7. Covariate screening and stepwise covariate modeling (SCM)
+
+### Exploratory ETA-covariate screening
+
+Before formal hypothesis testing, screen the empirical Bayes estimates
+(ETAs) of the base stochastic model (`r6`) against the covariate
+dictionary using
+[`pk_screen_covariates()`](../reference/pk_screen_covariates.md):
+
+- Continuous covariates are tested with Pearson’s correlation
+  ([`cor.test()`](https://rdrr.io/r/stats/cor.test.html)).
+- Categorical covariates are tested with Wilcoxon’s rank-sum test (2
+  levels) or Kruskal-Wallis (\>2 levels).
+- Every row reports the ETA’s shrinkage percentage so you can discount
+  trends on heavily shrunk ETAs.
+
+``` r
+
+scr <- pk_screen_covariates(r6, plots = TRUE)
+scr$table
+scr$plots$continuous
+scr$plots$categorical
+```
+
+### Manual covariate addition vs. automated SCM
+
+You can add covariates manually with
+[`pk_add_cov()`](../reference/pk_edit.md)—which supports four forms:
+
+- `"power"`: `theta * log(COV / ref)` (standard allometry and continuous
+  power models; set `fix = TRUE` for fixed allometric exponents such as
+  0.75 on `CL` and 1.0 on `V2`),
+- `"linear"`: `theta * (COV - ref)`,
+- `"cat"`: `theta * COV` (for 0/1-coded indicator variables; for
+  1/2-coded covariates such as `FOOD` in `crossover_pk.csv`, use
+  `form = "linear", ref = 1` or `form = "custom"`),
+- `"custom"`: arbitrary expression given via `term` and `theta`.
+
+For systematic testing, [`pk_scm()`](../reference/pk_scm.md) runs
+forward inclusion followed by backward elimination directly through the
+ledger:
+
+- Every trial model is a regular run in `runs.csv` with `stage = "scm"`
+  and the current step’s model as its parent.
+- In each forward step, the candidate with the largest OFV drop
+  exceeding the 1-df chi-square threshold at `forward_p` (default
+  `0.01`, `dOFV < -6.63`) is included (optionally requiring a successful
+  covariance step via `require_cov_step = TRUE`).
+- In each backward step, included covariates are removed one at a time;
+  the one with the smallest OFV increase below the threshold at
+  `backward_p` (default `0.001`, `dOFV < 10.83`) is eliminated.
+- With `decide_trials = TRUE` (default), non-selected trial runs are
+  automatically marked `"rejected"` with their exact `dOFV` in the
+  rationale, while runs along the selected path stay `"pending"` so the
+  analyst makes the final decision.
+- The full step table is saved to `scm/scm01.rds`.
+
+``` r
+
+cov_cands <- tibble::tribble(
+  ~param, ~covariate, ~form   , ~ref, ~init,
+  "cl"  , "WT"      , "power" , 70  , 0.75 ,
+  "cl"  , "CRCL"    , "power" , 100 , 0.3  ,
+  "cl"  , "AGE"     , "linear", 50  , 0    ,
+  "cl"  , "SEXF"    , "cat"   , NA  , 0    ,
+  "v2"  , "WT"      , "power" , 70  , 1.0  ,
+  "v2"  , "SEXF"    , "cat"   , NA  , 0
+)
+
+scm <- pk_scm(
+  base = r6,
+  candidates = cov_cands,
+  est = est_fast,
+  require_cov_step = FALSE
+)
+scm
+scm$steps
+```
+
+Once SCM completes, inspect the final model (`scm$final`), compare it
+against the base stochastic model (`r6`), check its diagnostics, and
+record your decision:
+
+``` r
+
+r_final_focei <- scm$final
+pk_compare(r6, r_final_focei, ref = "first")
+pk_params_table(r_final_focei)
+pk_diagnostics(r_final_focei, plots = TRUE)
+
+# Confirm the final covariate model with the default SAEM -> FOCEI strategy
+r_final <- r_final_focei |>
+  pk_inits_from(r_final_focei) |>
+  pk_run(
+    est = pk_est(method = "saem_focei", seed = 2026, nBurn = 200, nEm = 200),
+    note = "Final covariate model confirmed with SAEM -> FOCEI",
+    stage = "final"
+  )
+
+pk_decide(
+  r_final,
+  "accepted",
+  reason = "Final covariate model (WT and CRCL on CL, WT on V2) confirmed with SAEM->FOCEI; clean diagnostics"
+)
+```
+
+## 8. Robustness checks: multi-start and OFV reproducibility
+
+Before investing time in bootstrap and VPC, verify that the solution is
+not an artifact of initial estimates or Monte Carlo seed choice.
+
+### Searching for local minima (`pk_multistart()`)
+
+[`pk_multistart()`](../reference/pk_multistart.md) fits the same model
+from a table of distinct starting values (helpful when checking for
+absorption/elimination flip-flop in oral models). Each start is
+registered in the ledger with `stage = "multistart"`, and the lowest-OFV
+run is attached as `attr(ms, "best_run")`:
+
+``` r
+
+starts <- tibble::tribble(
+  ~set, ~ka , ~cl, ~v2, ~q , ~v3,
+  "S1", 0.5 , 3  , 20 , 2  , 30 ,
+  "S2", 1.5 , 6  , 40 , 5  , 60 ,
+  "S3", 3.0 , 10 , 60 , 10 , 100
+)
+
+ms <- pk_multistart(r_final, starts, est = est_fast)
+ms
+attr(ms, "best_run")
+```
+
+### Checking OFV reproducibility (`pk_repro()`)
+
+[`pk_repro()`](../reference/pk_repro.md) re-estimates a completed run
+using alternative SAEM seeds and/or randomly log-normal perturbed FOCEI
+starting values (`perturb_starts`). Each check is stored as a child run
+(`stage = "repro"`), and `attr(rep, "ofv_range")` gives the spread of
+OFVs across the original and repeated fits:
+
+``` r
+
+rep_check <- pk_repro(r_final, seeds = c(7, 99), perturb_starts = 2)
+rep_check
+attr(rep_check, "ofv_range")
+```
+
+## 9. Model evaluation: bootstrap, VPC, and exposure
+
+Evaluation artifacts are stored under `models/<run_id>/eval/` and logged
+in `events.csv`, so [`pk_report()`](../reference/pk_report.md) picks
+them up automatically.
+
+### Non-parametric bootstrap (`pk_bootstrap()`)
+
+[`pk_bootstrap()`](../reference/pk_bootstrap.md) resamples subjects with
+replacement (optionally stratified via `strata`), starts every replicate
+from the final estimates of `run`, and stores parameter estimates in
+`models/<run_id>/eval/bootstrap.rds`.
+
+- Sequential runs save after every replicate; re-calling
+  [`pk_bootstrap()`](../reference/pk_bootstrap.md) with a larger `n` and
+  `resume = TRUE` continues where the previous call stopped.
+- For parallel execution, install `future.apply`, set a future plan
+  (e.g., `future::plan("multisession")`), and pass `parallel = TRUE`.
+- [`pk_bootstrap_summary()`](../reference/pk_bootstrap_summary.md)
+  computes the bootstrap median, 2.5th and 97.5th percentiles, and
+  relative bias against the final estimates (back-transforming log-scale
+  parameters automatically).
+
+``` r
+
+# Use n = 200 (or 500-1000) for a production analysis
+pk_bootstrap(
+  r_final,
+  n = 200,
+  strata = "SEXF",
+  est = pk_est(method = "saem", nBurn = 250, nEm = 250)
+)
+pk_bootstrap_summary(r_final)
+```
+
+### Visual predictive check (`pk_vpc()`)
+
+[`pk_vpc()`](../reference/pk_vpc.md) wraps
+[`nlmixr2plot::vpcPlot()`](https://nlmixr2.github.io/nlmixr2plot/reference/vpcPlot.html)
+(requiring `nlmixr2plot` and `vpc`), saves the resulting ggplot to
+`models/<run_id>/eval/vpc.rds` (or `vpc_pc.rds` for `pred_corr = TRUE`),
+and records a `vpc` event:
+
+``` r
+
+pk_vpc(r_final, n = 500, pred_corr = TRUE, log_y = TRUE)
+```
+
+### Individual secondary parameters and steady-state exposure (`pk_exposure()`)
+
+[`pk_exposure()`](../reference/pk_exposure.md) extracts individual
+empirical Bayes parameter estimates from the fit, derives secondary PK
+parameters (`t_half_alpha`, `t_half_beta`, `t_half_abs`, `Vss`), and
+simulates a steady-state dosing regimen using `rxode2` to obtain
+`Cmax_ss`, `Tmax_ss`, `Cmin_ss`, `AUC_ss_sim`, `AUC_ss` (`dose / CL`),
+and `Cavg_ss`. Covariates from the dictionary are joined onto the table
+and the result is saved to `models/<run_id>/eval/exposure.rds`.
+
+[`pk_exposure_summary()`](../reference/pk_exposure_summary.md)
+summarizes geometric mean, geometric CV (%), median, and 5th–95th
+percentiles overall or across subgroups:
+
+``` r
+
+expo <- pk_exposure(r_final, dose = 100, ii = 24, n_doses = 14)
+head(expo)
+
+# Overall exposure summary
+pk_exposure_summary(expo)
+
+# Subgroup summary by body weight category
+expo$WT_group <- cut(expo$WT, breaks = c(0, 70, 90, Inf), labels = c("<70 kg", "70-90 kg", ">90 kg"))
+pk_exposure_summary(expo, by = "WT_group", metrics = c("AUC_ss", "Cmax_ss", "Cmin_ss", "t_half_beta"))
+```
+
+## 10. Reporting, auditing, and importing legacy runs
+
+### Generating the model development report (`pk_report()`)
+
+[`pk_report()`](../reference/pk_report.md) renders an R Markdown report
+directly from the project ledger and run artifacts—covering data checks,
+the full model development history, lineage tree, recorded decisions and
+rationales, final model code, parameter table, diagnostics and GOF/ETA
+plots, SCM step tables, bootstrap/VPC/exposure summaries (whenever
+present), reproducibility hashes and software versions, and the complete
+audit trail:
+
+``` r
+
+report_path <- pk_report(
+  final = r_final,
+  template = "regulatory",
+  output_format = "html_document"
+)
+```
+
+Pass a custom `.Rmd` path to `template` if you need
+organization-specific formatting; the template receives
+`params$proj_path` and `params$final_id`.
+
+### Auditing the completed workflow
+
+At the end of an analysis, [`pk_tree()`](../reference/pk_runs.md),
+[`pk_history()`](../reference/pk_runs.md), and
+[`pk_audit()`](../reference/pk_runs.md) give a complete, reproducible
+record of every model attempted and every decision made:
+
+``` r
+
+pk_tree()
+pk_history()
+tail(pk_audit(), 10)
+```
+
+### Migrating script-based runs (`pk_import_legacy()`)
+
+If you already have saved `nlmixr2` fit objects (`run001.rds`,
+`run002.rds`, …) from an older script-based project,
+[`pk_import_legacy()`](../reference/pk_import_legacy.md) imports them
+into a `poppkflow` ledger without modifying the source directory:
+
+``` r
+
+pk_import_legacy(
+  models_dir = "path/to/legacy/models",
+  history = "path/to/legacy/run_history.csv"
+)
+```
+
+Imported runs are tagged `stage = "legacy"`, assigned
+`decision = "pending"`, and stored without a `run_key` (so they are
+never silently returned by the cache). If matching `<run>.txt` model
+code files exist alongside the `.rds` fits, they are saved as custom
+specifications so new `poppkflow` runs can branch off legacy fits as
+parents.
