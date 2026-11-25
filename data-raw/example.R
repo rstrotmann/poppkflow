@@ -13,10 +13,6 @@
 #'   unit per litre).
 #' @return A data frame in nlmixr2 format with the columns `ID`, `TIME`, `DV`,
 #'   `AMT`, `EVID`, `WT`, `AGE`, `SEXF` and `CRCL`.
-#' @examples
-#' d <- pk_simulate_example(n = 10)
-#' head(d)
-#' @export
 pk_simulate_example <- function(n = 40, seed = 2026, dose = 100) {
   set.seed(seed)
   subj <- tibble::tibble(
